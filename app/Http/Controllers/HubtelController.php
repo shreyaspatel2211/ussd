@@ -31,15 +31,21 @@ class HubtelController extends Controller
                         $caseType = 'checkbalance';
                         break;
                     case '3':
-                        $caseType = 'checkdetails';
+                        $caseType = 'makepayment';
                         break;
                     case '4':
                         $caseType = 'contact';
                         break;
                     case '5':
-                        $caseType = 'update';
+                        $caseType = 'loan';
                         break;
                     case '6':
+                        $caseType = 'withdrawl';
+                        break;
+                    case '7':
+                        $caseType = 'susu_savings';
+                        break;
+                    case '8':
                         $caseType = 'addPackage';
                         break;
                 }
@@ -176,7 +182,7 @@ class HubtelController extends Controller
 
         switch ($type) {
             case 'Initiation':
-                $message = "Welcome to ".$company->name.".\nWhat do you want to do:\n1. Register\n2. Check balance\n3. Check details\n4. Contact Us\n5. Update\n6. Add Package";
+                $message = "Welcome to ".$company->name.".\nWhat do you want to do:\n1. Register\n2. Check balance\n3. Make Payment\n4. Contact Us\n5. Loan\n6. Withdrawl\n7. Susu-Savings\n8. Add Package";
                 $label = "Welcome";
                 $dataType = "input";
                 break;
@@ -226,10 +232,10 @@ class HubtelController extends Controller
                         $dataType = $SusuSavingsScreen['data_type'];
                         break;
                     case 'addPackage':
-                        $UpdateScreen = $this->handleAddPackageScreen($SessionId,$sequence);
-                        $message = $UpdateScreen['message'];
-                        $label = $UpdateScreen['label'];
-                        $dataType = $UpdateScreen['data_type'];
+                        $AddPackageScreen = $this->handleAddPackageScreen($SessionId,$sequence);
+                        $message = $AddPackageScreen['message'];
+                        $label = $AddPackageScreen['label'];
+                        $dataType = $AddPackageScreen['data_type'];
                         break;
                 }
                 break;       
