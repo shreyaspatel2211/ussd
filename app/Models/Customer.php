@@ -15,7 +15,8 @@ class Customer extends Model
         'pin',
         'plan_id',
         'operator_channel',
-        'reset_pin'
+        'reset_pin',
+        'company_id'
     ];
 
     public function transactions()

@@ -11,15 +11,18 @@ use App\Models\Transaction;
 use App\Models\Subscription;
 use App\Models\CallbackRequest;
 use App\Models\Plan;
+use App\Models\Loan;
+use App\Models\LoanRequest;
 use App\Models\Company;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use App\Models\WithdrawlRequest;
 
 class HubtelController extends Controller
 {
-    public function hubtelUSSD(Request $request){
+    public function hubtelUSSD(Request $request, $company_id){
         $caseType = null;
         if($request->Type == 'Response'){
             if ($request->Sequence == 2) {
@@ -40,12 +43,15 @@ class HubtelController extends Controller
                         $caseType = 'loan';
                         break;
                     case '6':
-                        $caseType = 'withdrawl';
+                        $caseType = 'loanRepayment';
                         break;
                     case '7':
-                        $caseType = 'susu_savings';
+                        $caseType = 'withdrawl';
                         break;
                     case '8':
+                        $caseType = 'susu_savings';
+                        break;
+                    case '9':
                         $caseType = 'addPackage';
                         break;
                 }
@@ -69,7 +75,7 @@ class HubtelController extends Controller
             'operator' => $request->Operator
         ]);
 
-        $responseTypeData = $this->handleType($request->Type,$request->Message,$request->Sequence,$request->SessionId,$caseType,$request->ServiceCode);
+        $responseTypeData = $this->handleType($request->Type,$request->Message,$request->Sequence,$request->SessionId,$caseType,$request->ServiceCode, $company_id);
         if ($caseType == "register" && isset(($responseTypeData['internal_number'])) && !empty($responseTypeData['internal_number'])) {
             Session::where('id',$newSessionData->id)->update(['internal_number'=> $responseTypeData['internal_number']]);
         }
@@ -126,7 +132,7 @@ class HubtelController extends Controller
         }
     }
 
-    public function hubtelUSSDCallback(Request $request)
+    public function hubtelUSSDCallback(Request $request, $company_id)
     {
         CallbackRequest::create(['request' => json_encode($request->all())]);
         $lastTransaction = Transaction::where('recurring_invoice_id',$request->Data['RecurringInvoiceId'])->orderBy('created_at','DESC')->first();
@@ -141,7 +147,7 @@ class HubtelController extends Controller
                     'Authorization' => "Basic {$token}",
                     'Content-Type' => 'application/json'
                 ])->delete("https://rip.hubtel.com/api/proxy/2023714/cancel-invoice/{$cancelOldRecurring->recurring_invoice_id}", [
-                    "callbackUrl" => "https://admin.smido.org/api/ussd/callback"
+                    "callbackUrl" => "https://smido.vikartrtechnologies.com/api/$company_id/ussd/callback"
                 ]);
                 $responseDataCancel = $response->getBody()->getContents();
                 Log::info("Plan cancelled request{$responseDataCancel}");
@@ -165,7 +171,7 @@ class HubtelController extends Controller
 
     }
 
-    public function handleType($type,$inputmessage,$sequence,$SessionId,$caseType,$ServiceCode){
+    public function handleType($type,$inputmessage,$sequence,$SessionId,$caseType,$ServiceCode, $company_id){
         $message = "";
         $label ="";
         $dataType = "";
@@ -178,61 +184,67 @@ class HubtelController extends Controller
                     ->orderBy('id', 'desc') 
                     ->first();
         
-        $company = Company::where('service_code', $ServiceCode)->first();
+        $company = Company::where('company_id', $company_id)->first();
 
         switch ($type) {
             case 'Initiation':
-                $message = "Welcome to ".$company->name.".\nWhat do you want to do:\n1. Register\n2. Check balance\n3. Make Payment\n4. Contact Us\n5. Loan\n6. Withdrawl\n7. Susu-Savings\n8. Add Package";
+                $message = "Welcome to ".$company->name.".\nWhat do you want to do:\n1. Register\n2. Check balance\n3. Make Payment\n4. Contact Us\n5. Loan\n6. Loan Repayment\n7. Withdrawl\n8. Susu-Savings\n9. Add Package";
                 $label = "Welcome";
                 $dataType = "input";
                 break;
             case 'Response':
                 switch ($caseType) {
                     case 'register':
-                        $RegisterScreen = $this->handleRegisterScreen($SessionId,$sequence);
+                        $RegisterScreen = $this->handleRegisterScreen($SessionId,$sequence,$company_id);
                         $message = $RegisterScreen['message'];
                         $label = $RegisterScreen['label'];
                         $dataType = $RegisterScreen['data_type'];
                         $internal_number = !empty($RegisterScreen['internal_number']) ? $RegisterScreen['internal_number']:0;
                         break;
                     case 'checkbalance':
-                        $checkBalanceScreen = $this->handleCheckBalanceScreen($SessionId,$sequence);
+                        $checkBalanceScreen = $this->handleCheckBalanceScreen($SessionId,$sequence,$company_id);
                         $message = $checkBalanceScreen['message'];
                         $label = $checkBalanceScreen['label'];
                         $dataType = $checkBalanceScreen['data_type'];
                         break;
                     case 'makepayment':
-                        $makePaymentScreen = $this->handleMakePaymentScreen($SessionId,$sequence);
+                        $makePaymentScreen = $this->handleMakePaymentScreen($SessionId,$sequence,$company_id);
                         $message = $makePaymentScreen['message'];
                         $label = $makePaymentScreen['label'];
                         $dataType = $makePaymentScreen['data_type'];
                         break;
                     case 'contact':
-                        $ContactScreen = $this->handleContactScreen($SessionId,$sequence);
+                        $ContactScreen = $this->handleContactScreen($SessionId,$sequence,$company_id);
                         $message = $ContactScreen['message'];
                         $label = $ContactScreen['label'];
                         $dataType = $ContactScreen['data_type'];
                         break;
                     case 'loan':
-                        $LoanScreen = $this->handleLoanScreen($SessionId,$sequence);
+                        $LoanScreen = $this->handleLoanRequestScreen($SessionId,$sequence,$company_id);
                         $message = $LoanScreen['message'];
                         $label = $LoanScreen['label'];
                         $dataType = $LoanScreen['data_type'];
                         break;
+                    case 'loanRepayment':
+                        $LoanRepaymentScreen = $this->handleLoanRepaymentScreen($SessionId,$sequence,$company_id);
+                        $message = $LoanRepaymentScreen['message'];
+                        $label = $LoanRepaymentScreen['label'];
+                        $dataType = $LoanRepaymentScreen['data_type'];
+                        break;
                     case 'withdrawl':
-                        $WithdrawlScreen = $this->handleWithdrawlScreen($SessionId,$sequence);
+                        $WithdrawlScreen = $this->handleWithdrawlScreen($SessionId,$sequence,$company_id);
                         $message = $WithdrawlScreen['message'];
                         $label = $WithdrawlScreen['label'];
                         $dataType = $WithdrawlScreen['data_type'];
                         break;
                     case 'susu_savings':
-                        $SusuSavingsScreen = $this->handleSusuSavingsScreen($SessionId,$sequence);
+                        $SusuSavingsScreen = $this->handleSusuSavingsScreen($SessionId,$sequence,$company_id);
                         $message = $SusuSavingsScreen['message'];
                         $label = $SusuSavingsScreen['label'];
                         $dataType = $SusuSavingsScreen['data_type'];
                         break;
                     case 'addPackage':
-                        $AddPackageScreen = $this->handleAddPackageScreen($SessionId,$sequence);
+                        $AddPackageScreen = $this->handleAddPackageScreen($SessionId,$sequence,$company_id);
                         $message = $AddPackageScreen['message'];
                         $label = $AddPackageScreen['label'];
                         $dataType = $AddPackageScreen['data_type'];
@@ -329,7 +341,7 @@ class HubtelController extends Controller
         return response()->json($response);
     }
 
-    public function handleRegisterScreen($SessionId,$sequence){
+    public function handleRegisterScreen($SessionId,$sequence,$company_id){
         $message = "";
         $label ="";
         $dataType = "";
@@ -355,7 +367,7 @@ class HubtelController extends Controller
                 break;
             case '5':
                 $message = "Enter Provider\n1. Vodafone\n2.MTN";
-                $label = "PhoneNumber";
+                $label = "Provider";
                 $dataType = "text";
                 $internal_number = 5;
                 break;
@@ -424,11 +436,13 @@ class HubtelController extends Controller
                         $Operator = "mtn_gh_rec";
                     }
                     if (empty($customerInfo) && $sequence ==7) {
+                        $companyID_for_create = Company::where('company_id', $company_id)->first();
                         Customer::create([
                             'name' => $firstName->message . " " . $lastName->message,
                             'phone_number' => $phoneNumber->message,
                             'pin' => $PIN->message,
-                            'operator_channel'=> $Operator
+                            'operator_channel'=> $Operator,
+                            'company_id' => $companyID_for_create->id
                         ]);
                     }else{
                         if ($sequence ==7) {
@@ -504,7 +518,7 @@ class HubtelController extends Controller
                         "totalAmount" => $pay_price,
                         "initialAmount" => $pay_price,
                         "currency" => "GHS",
-                        "callbackUrl" => "https://admin.smido.org/api/ussd/callback"
+                        "callbackUrl" => "https://smido.vikartrtechnologies.com/api/$company_id/ussd/callback"
                     ]);
                     Log::info("response", ['body' => $response->getBody()->getContents()]);
 
@@ -563,7 +577,7 @@ class HubtelController extends Controller
                             "label"=>$label,
                             "data_type"=>$dataType
                         ];
-                    }else{
+                    } else {
                         $message = "Please check sms for status of transaction!";
                         $label = "Transaction";
                         $dataType = "display";
@@ -585,7 +599,7 @@ class HubtelController extends Controller
                     $session = Session::where('session_id', $SessionId)->orderBy('id', 'desc')->skip(2)->first();
                     $start = $session->packages_start_index ? $session->packages_start_index : 0;
                     
-                    return $this->handlePackageNavigation($SessionId,$start);
+                    return $this->handlePackageNavigation($SessionId,$start,$company_id);
                 }
 
             }
@@ -617,12 +631,12 @@ class HubtelController extends Controller
             "totalAmount" => 0.01,
             "initialAmount" => 0.01,
             "currency" => "GHS",
-            "callbackUrl" => "https://admin.smido.org/api/ussd/callback"
+            "callbackUrl" => "https://smido.vikartrtechnologies.com/api/ussd/callback"
         ]);
         dd($response->getBody()->getContents());
     }
 
-    public function handleCheckBalanceScreen($SessionId,$sequence){
+    public function handleCheckBalanceScreen($SessionId,$sequence,$company_id){
         $message = "";
         $label ="";
         $dataType = "";
@@ -676,7 +690,7 @@ class HubtelController extends Controller
                 // }
                 $balance_amount =(!empty($balance) && !empty($balance->balance)) ? "{$balance->balance} GHS" : '0 GHS';
                 $message = "Name: {$balance->name}\nPhone Number: {$balance->phone_number}\nBalance: ". $balance_amount;
-                $label = "PIN";
+                $label = "Balance";
                 $dataType = "text";
                 break;
         }
@@ -688,13 +702,321 @@ class HubtelController extends Controller
         ];
     }
 
-    public function handleContactScreen($SessionId,$sequence){
+    public function handleWithdrawlScreen($SessionId,$sequence,$company_id){
         $message = "";
         $label ="";
         $dataType = "";
         switch ($sequence) {
             case '2':
-                $message = "Phone number:  0595813400\n 0595813400 \n P.o. Box 7663, First floor ITTU building, Suame Magazine Kumasi. \nEmail: Info@smido.org";
+                $message = "Enter your Phone Number";
+                $label = "PhoneNumber";
+                $dataType = "text";
+                break;
+            case '3':
+                $message = "Enter your PIN";
+                $label = "PIN";
+                $dataType = "text";
+                break;
+            case '4':
+                $phoneNumberforBalance = Session::where('session_id', $SessionId)
+                                ->whereNotNull('message')
+                                ->whereNotNull('request_json')
+                                ->whereNull('response_json')
+                                ->orderBy('id', 'desc') 
+                                ->skip(1) 
+                                ->first();
+
+                $PINforBalance = Session::where('session_id', $SessionId)
+                                ->whereNotNull('message')
+                                ->whereNotNull('request_json')
+                                ->whereNull('response_json')
+                                ->orderBy('id', 'desc') 
+                                ->first();
+
+                $balance = Customer::where('phone_number', $phoneNumberforBalance->message)->where('pin', $PINforBalance->message)->first();
+                if (empty($balance)) {
+                    $message = "Phone and pin doesn't match!";
+                    $label = "PIN";
+                    $dataType = "display";
+                    return [
+                        "message" => $message,
+                        "label"=>$label,
+                        "data_type"=>$dataType
+                    ];
+                }
+                $balance_amount =(!empty($balance) && !empty($balance->balance)) ? "{$balance->balance} GHS" : '0 GHS';
+                $message = "Enter the amount you want to withdraw";
+                $label = "Amount";
+                $dataType = "text";
+                break;
+            case '5':
+                $BalanceAmount = Session::where('session_id', $SessionId)
+                                ->whereNotNull('message')
+                                ->whereNotNull('request_json')
+                                ->whereNull('response_json')
+                                ->orderBy('id', 'desc') 
+                                ->first();
+
+                $phoneNumberforBalance = Session::where('session_id', $SessionId)
+                ->whereNotNull('message')
+                ->whereNotNull('request_json')
+                ->whereNull('response_json')
+                ->orderBy('id', 'desc') 
+                ->skip(2) 
+                ->first();
+
+                $PINforBalance = Session::where('session_id', $SessionId)
+                                ->whereNotNull('message')
+                                ->whereNotNull('request_json')
+                                ->whereNull('response_json')
+                                ->orderBy('id', 'desc') 
+                                ->skip(1)
+                                ->first();
+
+                $balance = Customer::where('phone_number', $phoneNumberforBalance->message)->where('pin', $PINforBalance->message)->first();
+                if($BalanceAmount->message > $balance){
+                    $message = "Your wallet doesn't have that much balance";
+                    $label = "Amount";
+                    $dataType = "text";
+                    return [
+                        "message" => $message,
+                        "label"=>$label,
+                        "data_type"=>$dataType
+                    ];
+                }
+                $message = "Withdrawl Success";
+                $label = "Amount";
+                $dataType = "text";
+                WithdrawlRequest::create([
+                    'customer_name' => $balance->name,
+                    'customer_phone_number' => $balance->phone_number,
+                    'amount' => $BalanceAmount->message
+                ]);
+                break;
+        }
+
+        return [
+            "message" => $message,
+            "label"=>$label,
+            "data_type"=>$dataType
+        ];
+    }
+
+    public function handleLoanRequestScreen($SessionId,$sequence,$company_id){
+        $message = "";
+        $label ="";
+        $dataType = "";
+        switch ($sequence) {
+            case '2':
+                $message = "Enter your Phone Number";
+                $label = "PhoneNumber";
+                $dataType = "text";
+                break;
+            case '3':
+                $message = "Enter your PIN";
+                $label = "PIN";
+                $dataType = "text";
+                break;
+            case '4':
+                $phoneNumberforLoan = Session::where('session_id', $SessionId)
+                                ->whereNotNull('message')
+                                ->whereNotNull('request_json')
+                                ->whereNull('response_json')
+                                ->orderBy('id', 'desc') 
+                                ->skip(1) 
+                                ->first();
+
+                $PINforLoan = Session::where('session_id', $SessionId)
+                                ->whereNotNull('message')
+                                ->whereNotNull('request_json')
+                                ->whereNull('response_json')
+                                ->orderBy('id', 'desc') 
+                                ->first();
+
+                $customer_details = Customer::where('phone_number', $phoneNumberforLoan->message)->where('pin', $PINforLoan->message)->first();
+                if (empty($customer_details)) {
+                    $message = "Phone and pin doesn't match!";
+                    $label = "PIN";
+                    $dataType = "display";
+                    return [
+                        "message" => $message,
+                        "label"=>$label,
+                        "data_type"=>$dataType
+                    ];
+                }
+                $balance_amount =(!empty($customer_details) && !empty($customer_details->balance)) ? "{$customer_details->balance} GHS" : '0 GHS';
+                $loan_details = Loan::where('customer_id', $customer_details->id)->first();
+                $max_amount = $customer_details->balance * $loan_details->factor;
+
+                $days = $customer_details->created_at->diffInDays(Carbon::now());
+                if($days >= $loan_details->lehibility_period){
+                    if($loan_details->set_volume == 'fixed'){
+                        $message = "Name: " . $customer_details->name . "\nBalance: " . $balance_amount . "\nLoan Balance: Enter the amount between". $loan_details->minimum_value . "to" . $loan_details->maximum_value;
+                        $label = "Customer Details";
+                        $dataType = "text";
+                    } else {
+                        $message = "Name: " . $customer_details->name . "\nBalance: " . $balance_amount . "\nMaximum amount you can take: ".$max_amount."\nLoan Balance: Enter the amount you want.";
+                        $label = "Customer Details";
+                        $dataType = "text";
+                    }
+                } else {
+                    $message = "Hello " . $customer_details->name . "! Sorry you are not eligible for now. Do contribute some more and come back later.";
+                    $label = "Customer Not Qualify";
+                    $dataType = "text";
+                }
+                break;
+            case '5';
+                $AmountforLoan = Session::where('session_id', $SessionId)
+                            ->whereNotNull('message')
+                            ->whereNotNull('request_json')
+                            ->whereNull('response_json')
+                            ->orderBy('id', 'desc') 
+                            ->first();
+                
+                $phoneNumberforLoan = Session::where('session_id', $SessionId)
+                    ->whereNotNull('message')
+                    ->whereNotNull('request_json')
+                    ->whereNull('response_json')
+                    ->orderBy('id', 'desc') 
+                    ->skip(2) 
+                    ->first();
+
+                $customer_details = Customer::where('phone_number', $phoneNumberforLoan->message)->first();
+                $loan_details = Loan::where('customer_id', $customer_details->id)->first();
+                $max_amount = $customer_details->balance * $loan_details->factor;
+
+                if($loan_details->set_volume == 'fixed'){
+                    if($AmountforLoan->message > $loan_details->maximum_value){
+                        $message = "You can not take the loan more than " . $loan_details->maximum_value;
+                        $label = "Loan Amount";
+                        $dataType = "text";
+                    } else {
+                        $message = "Thank you for succesfully making a loan request. You will be contacted soon.";
+                        $label = "Loan Amount";
+                        $dataType = "text";
+
+                        LoanRequest::create([
+                            'customer_name' => $customer_details->name,
+                            'customer_phone_number' => $customer_details->phone_number,
+                            'amount' => $AmountforLoan->message
+                        ]);
+                    }
+                } else {
+                    if($AmountforLoan->message > $max_amount){
+                        $message = "You can not take the loan more than " . $max_amount;
+                        $label = "Loan Amount";
+                        $dataType = "text";
+                    } else {
+                        $message = "Thank you for succesfully making a loan request. You will be contacted soon.";
+                        $label = "Loan Amount";
+                        $dataType = "text";
+
+                        LoanRequest::create([
+                            'customer_name' => $customer_details->name,
+                            'customer_phone_number' => $customer_details->phone_number,
+                            'amount' => $AmountforLoan->message
+                        ]);
+                    }
+                }
+                break;
+            
+        }
+
+        return [
+            "message" => $message,
+            "label"=>$label,
+            "data_type"=>$dataType
+        ];
+    }
+
+    public function handleLoanRepaymentScreen($SessionId,$sequence,$company_id){
+        $message = "";
+        $label ="";
+        $dataType = "";
+        switch ($sequence) {
+            case '2':
+                $message = "Enter your Phone Number";
+                $label = "PhoneNumber";
+                $dataType = "text";
+                break;
+            case '3':
+                $message = "Enter your PIN";
+                $label = "PIN";
+                $dataType = "text";
+                break;
+            case '4':
+                $phoneNumberforLoan = Session::where('session_id', $SessionId)
+                                ->whereNotNull('message')
+                                ->whereNotNull('request_json')
+                                ->whereNull('response_json')
+                                ->orderBy('id', 'desc') 
+                                ->skip(1) 
+                                ->first();
+
+                $PINforLoan = Session::where('session_id', $SessionId)
+                                ->whereNotNull('message')
+                                ->whereNotNull('request_json')
+                                ->whereNull('response_json')
+                                ->orderBy('id', 'desc') 
+                                ->first();
+
+                $customer_details = Customer::where('phone_number', $phoneNumberforLoan->message)->where('pin', $PINforLoan->message)->first();
+                if (empty($customer_details)) {
+                    $message = "Phone and pin doesn't match!";
+                    $label = "PIN";
+                    $dataType = "display";
+                    return [
+                        "message" => $message,
+                        "label"=>$label,
+                        "data_type"=>$dataType
+                    ];
+                }
+                $balance_amount =(!empty($customer_details) && !empty($customer_details->balance)) ? "{$customer_details->balance} GHS" : '0 GHS';
+                $loan_details = Loan::where('customer_id', $customer_details->id)->first();
+
+                $message = "Hello " . $customer_details->name . "\nWallet Balance: " . $balance_amount . "\nLoan Balance: " . $customer_details->loan_balance . "\n1.Make 1-time payment. \n2.Make recurring payment.";
+                $label = "Customer Details";
+                $dataType = "text";
+                break;
+            case '5':
+                $paymentPlanforLoanRepayment = Session::where('session_id', $SessionId)
+                                ->whereNotNull('message')
+                                ->whereNotNull('request_json')
+                                ->whereNull('response_json')
+                                ->orderBy('id', 'desc') 
+                                ->first();
+                if($paymentPlanforLoanRepayment->message == '1'){
+                    $message = "Enter the amount";
+                    $label = "Loan Repayment";
+                    $dataType = "text";
+                } else {
+                    $message = "Recurring Payment";
+                    $label = "Loan Repayment";
+                    $dataType = "text";
+                }
+                break;
+        }
+
+        return [
+            "message" => $message,
+            "label"=>$label,
+            "data_type"=>$dataType
+        ];
+    }
+
+    public function handleContactScreen($SessionId,$sequence,$company_id){
+        $message = "";
+        $label ="";
+        $dataType = "";
+
+        $company = Company::where('company_id', $company_id)->first();
+        $phone_number = $company->phone_number;
+        $location = $company->location;
+        $email = $company->email;
+
+        switch ($sequence) {
+            case '2':
+                $message = "Phone number: " . $phone_number ."\nLocation: " . $location . "\nEmail: " . $email;
                 $label = "Contact";
                 $dataType = "display";
                 break;
@@ -706,7 +1028,7 @@ class HubtelController extends Controller
         ];
     }
 
-    public function handleAddPackageScreen($SessionId,$sequence){
+    public function handleAddPackageScreen($SessionId,$sequence,$company_id){
         $message = "";
         $label ="";
         $dataType = "";
@@ -848,7 +1170,7 @@ class HubtelController extends Controller
                         "totalAmount" => $pay_price,
                         "initialAmount" => $pay_price,
                         "currency" => "GHS",
-                        "callbackUrl" => "https://admin.smido.org/api/ussd/callback"
+                        "callbackUrl" => "https://smido.vikartrtechnologies.com/api/$company_id/ussd/callback"
                     ]);
                     Log::info("response", ['body' => $response->getBody()->getContents()]);
 
@@ -935,7 +1257,8 @@ class HubtelController extends Controller
         ];
     }
 
-    public function handlePackageNavigation($SessionId,$start) {
+    public function handlePackageNavigation($SessionId,$start,$company_id) {
+
         $perPage = setting('admin.plans_per_page') ?? 6;
         
         $lastsessionData = Session::where('session_id', $SessionId)
@@ -978,7 +1301,10 @@ class HubtelController extends Controller
                 ->limit(2)
                 ->update(['packages_start_index' => $start]);
         
-        $plans = Plan::orderByRaw('CAST(plan_sequence AS UNSIGNED) ASC')
+        $company = Company::where('company_id', $company_id)->first();
+        $companyId = $company->id;
+        $plans = Plan::where('company_id', $companyId)
+                     ->orderByRaw('CAST(plan_sequence AS UNSIGNED) ASC')
                      ->skip($start)
                      ->take($perPage)
                      ->get();
@@ -1043,7 +1369,10 @@ class HubtelController extends Controller
 
         Session::where('session_id', $SessionId)->update(['packages_start_index' => $start]);
         
-        $plans = Plan::orderByRaw('CAST(plan_sequence AS UNSIGNED) ASC')
+        $company = Company::where('company_id', $company_id)->first();
+        $companyId = $company->id;
+        $plans = Plan::where('company_id', $companyId)
+                     ->orderByRaw('CAST(plan_sequence AS UNSIGNED) ASC')
                      ->skip($start)
                      ->take($perPage)
                      ->get();

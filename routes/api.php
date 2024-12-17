@@ -15,9 +15,9 @@ use App\Http\Controllers\HubtelController;
 */
 
 
-Route::post('ussd', [HubtelController::class, 'hubtelUSSD']);
+Route::post('{company_id}/ussd', [HubtelController::class, 'hubtelUSSD']);
 Route::post('ussd-test', [HubtelController::class, 'hubtelUSSDtest']);
-Route::post('ussd/callback', [HubtelController::class, 'hubtelUSSDCallback']);
+Route::post('{company_id}/ussd/callback', [HubtelController::class, 'hubtelUSSDCallback']);
 
 Route::middleware('auth:api')->get('/user', function (Request $request) {
     return auth()->user();
